@@ -1,0 +1,156 @@
+﻿@page "/"
+@rendermode InteractiveServer
+
+@using System
+@using System.IO
+@using ImagePredictionML.Classes
+@using ImagePredictionML.classes
+@using Microsoft.AspNetCore.Hosting
+@using Microsoft.Extensions.Logging
+@using Microsoft.Extensions.Options
+@using Microsoft.ML
+@inject ILogger<Home> Logger
+@inject IWebHostEnvironment Environment
+@inject IImageClassifier _imageClassifier;
+@inject IOptions<AppSettings> options;
+
+
+<h1>Hello, AI Compadres!</h1>
+
+In this sample app, we will use ML.Net to classify images with the TensorFlow Inception deep learning model,
+a renowned image recognition model trained on the ImageNet dataset.
+<br>
+<p></p>
+<p></p>
+<p>Upload an Image of up to @maxFileSize KB:</p>
+
+<InputFile OnChange="@LoadFiles" single accept=".jpg,.jpeg,.png" title="Choose Image"/>
+
+
+@if (isLoading)
+{
+    <p>Uploading...</p>
+}
+else
+{
+    <img alt="" src="@base64ImageString" style="height:160px;width:160px;" />
+}
+
+@if (loadedFiles.Count > 0)
+{
+    if (isCalculating)
+    {
+        <p>Analyzing the Image please wait...</p>
+    }
+    else
+    {
+        <p>Let's begin the image classification.</p>
+
+        <button @onclick="PredictImage" Color="ButtonColor.Info">Click to Start..</button>
+
+        @if (predictedOutput != null)
+        {
+            <p>
+                Image Classified as: <b> @predictedOutput.PredictedValue </b>
+            </p>
+            <p>
+                Max Predicted Score: <b>@predictedOutput.Score.Max() </b>
+            </p>
+
+        }
+    }
+    
+}
+
+
+
+@code {
+
+
+    private List<IBrowserFile> loadedFiles = new();
+    private long maxFileSize = 400;
+    private bool isLoading = false;
+    private bool isCalculating = false;
+    private string base64ImageString = "thumbnail-default.png";
+    private string extensionname = "default";
+    private string isdisplayimage = string.Empty;
+    private PredictionOutput predictedOutput = null;
+
+
+    private async Task LoadFiles(InputFileChangeEventArgs e)
+    {
+        isLoading = true;
+        predictedOutput = null;
+        loadedFiles.Clear();
+        await Task.Delay(1000);
+        var file = e.File;
+
+        try
+        {
+            loadedFiles.Add(file);
+
+            //get the upload file extension.
+            extensionname = Path.GetExtension(file.Name);
+
+            var imagefiletypes = new List<string>() {
+                    ".png",".jpg",".jpeg"
+            };
+
+            if (imagefiletypes.Contains(extensionname))
+            {
+
+                //resize the image and create the thumbnails
+                var resizedFile = await file.RequestImageFileAsync(file.ContentType, 640, 480);
+                var buf = new byte[resizedFile.Size];
+                using (var stream = resizedFile.OpenReadStream())
+                {
+                    await stream.ReadAsync(buf);
+                }
+                base64ImageString = "data:image/jpg;base64," + Convert.ToBase64String(buf);
+
+                //show the thumbnail
+                isdisplayimage = "block";
+            }
+            else
+            {
+                isdisplayimage = "none";
+            };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("File: {Filename} Error: {Error}",
+                file.Name, ex.Message);
+        }
+
+        isLoading = false;
+    }
+
+    private async Task PredictImage()
+    {
+        predictedOutput = null;
+        isCalculating = true;
+        await Task.Delay(1000);
+        MLContext context = new MLContext();
+        var model = _imageClassifier.GenerateModel(context);
+        var file = loadedFiles.FirstOrDefault();
+        var filename = file?.Name.Substring(0, file.Name.Length - 4) + DateTime.Now.Ticks.ToString() + ".jpg";
+
+        //string path = @"D:\Examples\ImageClassification\ImagePredictionML\TrainingData\"; 
+        string path = options.Value.TrainingDataPath;
+        var filepath = path + filename;
+        using (FileStream fs = new FileStream(filepath, FileMode.CreateNew))
+        {
+            using (BinaryWriter bw = new BinaryWriter(fs))
+            {
+                string convert = base64ImageString.Replace("data:image/jpg;base64,", String.Empty);
+                byte[] data = Convert.FromBase64String(convert);
+                bw.Write(data);
+                bw.Close();
+            }
+        }
+
+        predictedOutput = _imageClassifier.ClassifySingleImage(context, model, filepath);
+
+        isCalculating = false;
+    }
+}
